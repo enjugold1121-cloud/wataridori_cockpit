@@ -4,7 +4,7 @@
 
 ビルド不要の静的Webアプリ。GitHub Pagesで公開している。
 
-公開URL：https://enjugold1121-cloud.github.io/wataridori-cockpit/
+公開URL：https://enjugold1121-cloud.github.io/wataridori_cockpit/
 
 ## 公開について
 
