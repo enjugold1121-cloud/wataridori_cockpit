@@ -1,0 +1,13 @@
+{
+  "name": "渡り鳥の操縦席",
+  "short_name": "操縦席",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F7F5F0",
+  "theme_color": "#F7F5F0",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
