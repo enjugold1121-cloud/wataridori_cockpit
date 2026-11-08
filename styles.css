@@ -280,7 +280,8 @@ h1, h2, h3, p { margin: 0; }
   -webkit-line-clamp: 2;
   overflow: hidden;
 }
-.note-text .note-body { display: inline; font-size: inherit; }
+.note-text .note-body { display: inline; font-size: inherit; padding: 4px 0; }
+.note-text .note-body.is-short { display: inline-block; min-width: 4em; margin: -4px 0; }
 
 .check {
   flex: none;
@@ -315,6 +316,7 @@ h1, h2, h3, p { margin: 0; }
   transform: rotate(45deg);
 }
 .is-done .note-text { text-decoration: line-through; opacity: .62; }
+.is-done .note-body.is-short { text-decoration: line-through; }
 .note.is-done { box-shadow: none; }
 
 .note-chosen { box-shadow: var(--shadow-lift); }

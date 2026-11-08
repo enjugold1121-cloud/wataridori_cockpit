@@ -79,11 +79,17 @@
     return `<li class="note note-add" data-nodrag><input class="add-input" type="text" enterkeyhint="done" maxlength="200" placeholder="${placeholder}" aria-label="${placeholder}"></li>`;
   }
 
-  // 文字の上は編集、それ以外の余白はチェック（余白のタップで編集が開かないようにする）
+  // 文字の上は編集、それ以外の余白はチェック（余白のタップで編集が開かないようにする）。
+  // 短い文は編集の範囲が狭すぎて誤って完了しやすいので、4文字分の幅を確保する。
+  function noteTextHTML(text) {
+    const short = [...text].length <= 6 ? ' is-short' : '';
+    return `<div class="note-text"><span class="note-body${short}" data-act="edit" role="button" tabindex="0">${esc(text)}</span></div>`;
+  }
+
   function workNoteHTML(task) {
     return `<li class="note note-work${task.done ? ' is-done' : ''}" data-id="${task.id}" data-act="toggle-work">
       <button class="check" data-act="toggle-work" data-nodrag aria-pressed="${task.done}" aria-label="完了にする"><span></span></button>
-      <div class="note-text"><span class="note-body" data-act="edit" role="button" tabindex="0">${esc(task.text)}</span></div>
+      ${noteTextHTML(task.text)}
     </li>`;
   }
 
@@ -189,7 +195,7 @@
       const done = !ui.peek && S.lifeDone(day, item.id);
       return `<li class="note note-life${done ? ' is-done' : ''}" data-id="${item.id}" data-act="${ui.peek ? 'edit' : 'toggle-life'}">
         ${ui.peek ? '' : `<button class="check" data-act="toggle-life" data-nodrag aria-pressed="${done}" aria-label="完了にする"><span></span></button>`}
-        <div class="note-text"><span class="note-body" data-act="edit" role="button" tabindex="0">${esc(item.text)}</span></div>
+        ${noteTextHTML(item.text)}
       </li>`;
     }).join('') + (adding ? addRowHTML('毎日くり返す付箋') : '');
     if (!items.length && !adding) list.innerHTML = '<li class="empty">この時間帯の付箋はなし</li>';
@@ -593,7 +599,7 @@
         ${moves.join('')}
       </div>
       <footer class="sheet-foot">
-        <button class="btn btn-danger" data-act="sheet-delete">${ref.kind === 'life' ? '毎日の付箋から外す' : '削除'}</button>
+        <button class="btn btn-danger" data-act="sheet-delete">削除</button>
       </footer>`;
   }
 
@@ -771,7 +777,7 @@
       S.remove(ref);
       closeSheet();
       refresh();
-      toast(ref.kind === 'life' ? '毎日の付箋から外しました' : '削除しました', snap);
+      toast('削除しました', snap);
     },
     undo() {
       if (!ui.undo) return;
