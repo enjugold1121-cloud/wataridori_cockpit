@@ -56,6 +56,7 @@ window.WB = window.WB || {};
     state,
     onSaveError: null,
     onExternalChange: null,
+    onCommit: null,       // 保存のたびに呼ぶ（共有の送信に使う）
 
     // 初回起動なら true を返す
     async init() {
@@ -88,6 +89,7 @@ window.WB = window.WB || {};
 
     commit(...names) {
       names.forEach(name => save(name, state[name]));
+      if (S.onCommit) S.onCommit(names);
     },
 
     snapshot() {

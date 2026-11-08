@@ -1,5 +1,6 @@
 /**
  * 渡り鳥の操縦席：Googleカレンダーの予定を読み取り専用で返す中継（Webアプリ）。
+ * 付箋の共有（action=pull と doPost）は sync-store.js。
  *
  * - 返すのは予定のID・名前・開始と終了の時刻だけ。説明・場所・参加者は返さない
  * - スクリプトプロパティ ACCESS_KEY と一致する鍵がない呼び出しには何も返さない
@@ -14,6 +15,13 @@ function doGet(e) {
   const props = PropertiesService.getScriptProperties();
   const key = props.getProperty('ACCESS_KEY');
   if (!key || params.key !== key) return json_({ ok: false, error: 'unauthorized' });
+  if (params.action === 'pull') {
+    try {
+      return json_(pullUnits_(props, params));
+    } catch (err) {
+      return json_({ ok: false, error: String(err && err.message || err) });
+    }
+  }
 
   const from = params.from;
   const to = params.to;

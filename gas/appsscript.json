@@ -3,7 +3,9 @@
   "runtimeVersion": "V8",
   "exceptionLogging": "STACKDRIVER",
   "oauthScopes": [
-    "https://www.googleapis.com/auth/calendar.readonly"
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/script.external_request"
   ],
   "dependencies": {
     "enabledAdvancedServices": [

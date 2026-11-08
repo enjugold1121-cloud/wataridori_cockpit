@@ -23,6 +23,7 @@
     eventsLoadedAt: 0,      // 予定を最後に取りにいった時刻
     loadingCount: 0,
     pendingLoads: {},       // 取得中の範囲（同じ範囲を重ねて取りにいかない）
+    pendingRemote: false,   // 操作中に届いた共有の変更（操作が終わってから描き直す）
     expanded: new Set(),    // 手動で開いた時間ブロック
     focusBlock: null,       // 直前に開いた時間ブロック
     undo: null,             // 元に戻す用のスナップショット
@@ -349,6 +350,8 @@
       html = '<span class="status-dot"></span><span><span class="status-google">Google</span>カレンダー未接続</span><span class="status-more">（サンプル予定を表示中）</span>';
     } else if (P.status === 'error') {
       html = '<span class="status-dot is-error"></span><span><span class="status-google">Google</span>カレンダーを取得できません</span><span class="status-more">（前回の予定を表示中）</span>';
+    } else if (WB.sync.enabled && WB.sync.error) {
+      html = '<span class="status-dot is-error"></span><span>付箋を共有できません</span><span class="status-more">（この端末には保存済み）</span>';
     } else {
       const at = P.updatedAt ? `（${T.clock(P.updatedAt)} 更新）` : '';
       html = `<span class="status-dot is-on"></span><span><span class="status-google">Google</span>カレンダー接続中</span><span class="status-more">${at}</span>`;
@@ -467,6 +470,10 @@
     renderClock();
     tickTimer();
     if (ui.dragging || ui.adding) return;
+    if (ui.pendingRemote) {
+      ui.pendingRemote = false;
+      refresh();
+    }
     if (WB.calendarProvider.connected && !ui.loadingCount && Date.now() - ui.eventsLoadedAt > EVENTS_TTL_MS) {
       reloadEvents();
     }
@@ -737,8 +744,58 @@
         </div>
         <p class="field-hint" id="cal-msg">${esc(calendarStatusText())}</p>
       </div>
-      <p class="field-hint">データはこのブラウザの中だけに保存します。PCとiPadの間では同期されません。</p>`;
+      ${syncSectionHTML()}
+      <p class="field-hint">${WB.sync.enabled
+        ? '付箋・保留・生活の付箋・完了履歴は、この端末とGoogleドライブに保存します。設定とタイマーは端末ごとです。'
+        : 'データはこのブラウザの中だけに保存します。'}</p>`;
     if (!dlg.open) dlg.showModal();
+  }
+
+  function syncSectionHTML() {
+    let body;
+    if (!WB.calendarProvider.connected) {
+      body = '<p class="field-hint">先に「Googleカレンダー連携」をつないでください。同じ中継を使って共有します。</p>';
+    } else if (!WB.sync.enabled) {
+      body = `<p class="field-hint">付箋・保留・生活の付箋・完了履歴を、Googleドライブを通して他の端末と共有します。最初に共有を始めた端末の内容が基準になります。</p>
+        <div><button class="btn" data-act="sync-enable">共有を始める</button></div>`;
+    } else {
+      body = `<div class="btn-group">
+          <button class="btn" data-act="sync-now">今すぐ同期</button>
+          <button class="btn btn-quiet" data-act="sync-disable">共有をやめる</button>
+        </div>`;
+    }
+    return `<div class="field">
+        <span class="field-label">PCとiPadで付箋を共有</span>
+        ${body}
+        <p class="field-hint${WB.sync.enabled && WB.sync.error ? ' is-error' : ''}" id="sync-msg">${esc(syncStatusText())}</p>
+      </div>`;
+  }
+
+  function syncStatusText() {
+    const Y = WB.sync;
+    if (!Y.enabled) return '';
+    if (Y.error) return `共有できませんでした（${Y.error}）。この端末には保存されていて、つながったら送ります。`;
+    return Y.lastSyncAt ? `共有中です（${T.clock(Y.lastSyncAt)} 同期）。` : '共有中です。';
+  }
+
+  async function enableSync() {
+    const msg = $('#sync-msg');
+    msg.classList.remove('is-error');
+    msg.textContent = '共有の準備をしています…';
+    try {
+      const result = await WB.sync.enable(() => window.confirm(
+        '共有データがすでにあります。\nこの端末の付箋・保留・生活の付箋・完了履歴は、共有データに置き換わります（いまの内容は端末に控えを残します）。\n\n置き換えて共有を始めますか？'));
+      if (result === 'cancelled') {
+        msg.textContent = '共有は始めていません。';
+        return;
+      }
+      openSettings();
+      $('#sync-msg').textContent = result === 'uploaded' ? 'この端末の内容で共有を始めました。' : '共有データを読み込みました。';
+      refresh();
+    } catch (e) {
+      msg.textContent = `共有を始められませんでした：${e.message}`;
+      msg.classList.add('is-error');
+    }
   }
 
   function calendarStatusText() {
@@ -800,10 +857,22 @@
     'cal-disconnect'() {
       Object.assign(state.settings, { calendarUrl: '', calendarKey: '' });
       S.commit('settings');
+      WB.sync.disable();
       ui.events = {};
       renderStatus();
       openSettings();
       refresh();
+    },
+    'sync-enable': enableSync,
+    async 'sync-now'() {
+      $('#sync-msg').textContent = '同期しています…';
+      await WB.sync.push();
+      await WB.sync.pull();
+      if ($('#settings').open) openSettings();
+    },
+    'sync-disable'() {
+      WB.sync.disable();
+      openSettings();
     },
     tab(el) { ui.tab = el.dataset.tab; refresh(); },
 
@@ -1047,6 +1116,8 @@
       const dlg = document.getElementById(id);
       dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
     });
+    // 閉じた設定画面に鍵を残さない
+    $('#settings').addEventListener('close', () => { $('#settings').innerHTML = ''; });
 
     window.addEventListener('hashchange', refresh);
     window.addEventListener('resize', () => {
@@ -1081,6 +1152,19 @@
     S.onSaveError = () => toast('保存できませんでした。ブラウザの設定を確認してください');
     S.onExternalChange = () => { if (!ui.dragging && !ui.adding) refresh(); };
     applyTheme();
+    WB.sync.onRemoteChange = () => {
+      if (ui.dragging || ui.adding) ui.pendingRemote = true;
+      else refresh();
+    };
+    WB.sync.onConflict = () => toast('もう一方の端末でも同じところが変わっていたため、この端末の内容で上書きしました');
+    WB.sync.onStatus = () => {
+      renderStatus();
+      const msg = $('#sync-msg');
+      if (msg && $('#settings').open) msg.textContent = syncStatusText();
+    };
+    WB.sync.start();
+    // 共有中なら新しい分を先に受け取ってから表示する（くり返し付箋を二重に貼らないため）
+    if (WB.sync.enabled) await Promise.race([WB.sync.pull(), new Promise(resolve => setTimeout(resolve, 4000))]);
     // 接続済みなら前回の予定で先に表示し、裏で取り直す
     const cached = WB.calendarProvider.connected ? WB.calendarProvider.cached(today(), today()) : {};
     if (cached[today()]) Object.assign(ui.events, cached);
