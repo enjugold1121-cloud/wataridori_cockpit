@@ -699,6 +699,10 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .check-row { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-bottom: 8px; }
 .check-row input { width: 20px; height: 20px; }
 
+.pick-day { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pick-day .btn { padding: 0 12px; }
+.pick-day-label { flex: 1; min-width: 0; text-align: center; font-weight: 700; font-size: 15px; white-space: nowrap; }
+.pick-empty { padding: 14px 4px; font-size: 14px; color: var(--ink-2); }
 .pick-list { display: flex; flex-direction: column; gap: 6px; }
 .pick {
   display: flex;

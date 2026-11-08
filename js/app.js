@@ -62,11 +62,13 @@
 
   function ensureEvents(from, to) {
     const key = `${from}_${to}`;
-    if (ui.pendingLoads[key]) return;
-    ui.pendingLoads[key] = loadEvents(from, to).finally(() => {
-      delete ui.pendingLoads[key];
-      refresh();
-    });
+    if (!ui.pendingLoads[key]) {
+      ui.pendingLoads[key] = loadEvents(from, to).finally(() => {
+        delete ui.pendingLoads[key];
+        refresh();
+      });
+    }
+    return ui.pendingLoads[key];
   }
 
   // 表示中の日の予定を取り直し、変わっていれば描き直す
@@ -605,19 +607,22 @@
     return { index: list.findIndex(x => x.id === ref.id), count: list.length };
   }
 
+  // 移動先は日を切り替えて選べる（今日より前へは戻らない）
   function renderPicker(ref, day) {
     const isToday = day === today();
-    const blocks = blocksFor(day, { includeFree: true }).filter(b => {
+    const loaded = !!ui.events[day];
+    const blocks = loaded ? blocksFor(day, { includeFree: true }).filter(b => {
       if (ref.kind === 'work' && ref.day === day && ref.blockId === b.id) return false;
       if (b.kind === 'orphan') return false;
       return !isToday || phaseOf(b, day) !== 'past';
-    });
-    return `<header class="sheet-head">
-        <h2>${isToday ? '今日のどの時間に移しますか' : `${T.dayLabel(day)}のどの時間に移しますか`}</h2>
-        <button class="btn btn-quiet" data-act="sheet-back">戻る</button>
-      </header>
-      <p class="sheet-quote">${esc(S.find(ref).text)}</p>
-      <div class="pick-list">
+    }) : [];
+    let body;
+    if (!loaded) {
+      body = '<p class="pick-empty">予定を読み込んでいます…</p>';
+    } else if (!blocks.length) {
+      body = '<p class="pick-empty">この日は移せる予定がありません。上のボタンで別の日を選べます。</p>';
+    } else {
+      body = `<div class="pick-list">
         ${blocks.map(b => `<button class="pick" data-act="pick-block" data-block="${esc(b.id)}">
           <span class="pick-time">${b.start ? `${b.start}〜${b.end}` : '時間未定'}</span>
           <span class="pick-title">${b.id === FREE ? '時間を決めずに置く' : esc(b.title)}</span>
@@ -625,6 +630,31 @@
           <span class="pick-count">${b.tasks.length ? `${b.tasks.length}個` : ''}</span>
         </button>`).join('')}
       </div>`;
+    }
+    return `<header class="sheet-head">
+        <h2>どの時間に移しますか</h2>
+        <button class="btn btn-quiet" data-act="sheet-back">戻る</button>
+      </header>
+      <p class="sheet-quote">${esc(S.find(ref).text)}</p>
+      <div class="pick-day">
+        <button class="btn" data-act="pick-day" data-step="-1"${day > today() ? '' : ' disabled'}>‹ 前の日</button>
+        <span class="pick-day-label">${isToday ? `今日 ${T.dayLabel(day)}` : T.dayLabel(day)}</span>
+        <button class="btn" data-act="pick-day" data-step="1">次の日 ›</button>
+      </div>
+      ${body}`;
+  }
+
+  // 移動先の日を表示する。予定が未取得なら、その週の分を取ってから描き直す。
+  function showPickDay(day) {
+    ui.sheet.mode = 'pick';
+    ui.sheet.pickDay = day;
+    renderSheet();
+    if (ui.events[day]) return;
+    const from = T.weekStart(day);
+    const redraw = () => {
+      if ($('#sheet').open && ui.sheet && ui.sheet.mode === 'pick' && ui.sheet.pickDay === day) renderSheet();
+    };
+    ensureEvents(from, T.addDays(from, 6)).then(redraw, redraw);
   }
 
   function renderSheet() {
@@ -703,7 +733,8 @@
       refresh();
     });
     closeSheet();
-    toast(`「${blockTitle(day, blockId)}」へ移しました`, snap);
+    const where = day === today() ? '' : T.dayLabel(day) + 'の';
+    toast(`${where}「${blockTitle(day, blockId)}」へ移しました`, snap);
   }
 
   /* ---------- 設定 ---------- */
@@ -980,16 +1011,9 @@
       renderSheet();
       toast('くり返しをやめました', snap);
     },
-    'sheet-pick-today'() {
-      ui.sheet.mode = 'pick';
-      ui.sheet.pickDay = today();
-      renderSheet();
-    },
-    'sheet-pick-same'() {
-      ui.sheet.mode = 'pick';
-      ui.sheet.pickDay = ui.sheet.ref.day;
-      renderSheet();
-    },
+    'sheet-pick-today'() { showPickDay(today()); },
+    'sheet-pick-same'() { showPickDay(ui.sheet.ref.day); },
+    'pick-day'(el) { showPickDay(T.addDays(ui.sheet.pickDay, Number(el.dataset.step))); },
     'pick-block'(el) { moveToBlock(ui.sheet.ref, ui.sheet.pickDay, el.dataset.block); },
     'sheet-to-hold'() {
       const ref = ui.sheet.ref;

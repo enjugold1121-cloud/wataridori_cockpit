@@ -186,7 +186,9 @@ window.WB = window.WB || {};
         if (placed.includes(repeat.id)) return;
         const block = sorted.find(ev => ev.title === repeat.title);
         if (!block) return;
-        listOf({ kind: 'work', day, blockId: block.id }, true).push({ ...makeTask(repeat.text), repeatId: repeat.id });
+        // 別の日から移してきた分がすでにあれば、その日は新しく貼らない
+        const already = Object.values(state.work[day] || {}).some(list => list.some(t => t.repeatId === repeat.id));
+        if (!already) listOf({ kind: 'work', day, blockId: block.id }, true).push({ ...makeTask(repeat.text), repeatId: repeat.id });
         placed.push(repeat.id);
         changed = true;
       });
