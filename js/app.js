@@ -86,10 +86,12 @@
     return `<div class="note-text"><span class="note-body${short}" data-act="edit" role="button" tabindex="0">${esc(text)}</span></div>`;
   }
 
+  const REPEAT_MARK = '<svg class="repeat-mark" viewBox="0 0 16 16" role="img" aria-label="くり返し"><path d="M12.8 5.6A5.2 5.2 0 0 0 3.4 4.6M3.2 10.4a5.2 5.2 0 0 0 9.4 1" /><path d="M3.2 1.9v2.9h2.9M12.8 14.1v-2.9H9.9" /></svg>';
+
   function workNoteHTML(task) {
-    return `<li class="note note-work${task.done ? ' is-done' : ''}" data-id="${task.id}" data-act="toggle-work">
+    return `<li class="note note-work${task.done ? ' is-done' : ''}${task.repeatId ? ' is-repeat' : ''}" data-id="${task.id}" data-act="toggle-work">
       <button class="check" data-act="toggle-work" data-nodrag aria-pressed="${task.done}" aria-label="完了にする"><span></span></button>
-      ${noteTextHTML(task.text)}
+      ${noteTextHTML(task.text)}${task.repeatId ? REPEAT_MARK : ''}
     </li>`;
   }
 
@@ -267,6 +269,9 @@
       loadEvents(today(), today()).then(refresh);
       return;
     }
+    // くり返し付箋は今日以降の表示中の日にだけ貼る（過ぎた日には後から足さない）
+    const visibleDays = cal ? WB.calendarView.days() : [today()];
+    visibleDays.filter(d => d >= today()).forEach(d => S.placeRepeats(d, ui.events[d] || []));
     $('#page-main').hidden = cal;
     $('#page-calendar').hidden = !cal;
     $('.tabs').hidden = cal;
@@ -561,7 +566,8 @@
     }
     const { index, count } = sheetPosition(ref);
     const isWork = ref.kind === 'work';
-    const titles = { hold: '保留の付箋', work: '仕事の付箋', life: '生活の付箋' };
+    const repeat = isWork && item.repeatId ? S.repeatOf(item.repeatId) : null;
+    const titles = { hold: '保留の付箋', work: repeat ? 'くり返しの付箋' : '仕事の付箋', life: '生活の付箋' };
     const orderLabels = isWork ? ['↑ 前へ', '↓ 後へ'] : ['↑ 上へ', '↓ 下へ'];
     const moves = [];
     if (ref.kind === 'hold') {
@@ -591,6 +597,14 @@
         <span class="field-label">時間帯（毎日くり返します）</span>
         <div class="segmented">${BANDS.map(b => `<button class="seg${b === ref.band ? ' is-on' : ''}" data-act="sheet-band" data-band="${b}">${BAND_LABEL[b]}</button>`).join('')}</div>
       </div>` : ''}
+      ${isWork && ref.blockId !== FREE ? `<div class="field">
+        <span class="field-label">くり返し</span>
+        ${repeat
+          ? `<p class="field-hint">予定「${esc(repeat.title)}」がある日に、毎回この付箋を貼ります。文字の変更は次回以降にも反映されます。</p>
+             <div><button class="btn" data-act="sheet-stop-repeat">くり返しをやめる</button></div>`
+          : `<p class="field-hint">同じ名前の予定「${esc(blockTitle(ref.day, ref.blockId))}」がある日に、この付箋を自動で貼ります。</p>
+             <div><button class="btn" data-act="sheet-repeat">この予定に毎回出す</button></div>`}
+      </div>` : ''}
       <div class="sheet-actions">
         <div class="btn-group">
           <button class="btn" data-act="sheet-up"${index <= 0 ? ' disabled' : ''}>${orderLabels[0]}</button>
@@ -599,7 +613,7 @@
         ${moves.join('')}
       </div>
       <footer class="sheet-foot">
-        <button class="btn btn-danger" data-act="sheet-delete">削除</button>
+        <button class="btn btn-danger" data-act="sheet-delete">${repeat ? 'この日だけ削除' : '削除'}</button>
       </footer>`;
   }
 
@@ -750,6 +764,22 @@
       refresh();
       toast(`${BAND_LABEL[band]}へ移しました`, snap);
     },
+    'sheet-repeat'() {
+      const ref = ui.sheet.ref;
+      const snap = S.snapshot();
+      const title = blockTitle(ref.day, ref.blockId);
+      S.makeRepeat(ref, title);
+      refresh();
+      renderSheet();
+      toast(`予定「${title}」がある日に毎回出します`, snap);
+    },
+    'sheet-stop-repeat'() {
+      const snap = S.snapshot();
+      S.stopRepeat(ui.sheet.ref, today());
+      refresh();
+      renderSheet();
+      toast('くり返しをやめました', snap);
+    },
     'sheet-pick-today'() {
       ui.sheet.mode = 'pick';
       ui.sheet.pickDay = today();
@@ -863,7 +893,7 @@
         // 空欄は保存せず、直前の内容を残す
         const text = e.target.value.replace(/\s*\n\s*/g, ' ').trim();
         if (text) {
-          S.update(ui.sheet.ref, { text });
+          S.update(ui.sheet.ref, { text }, today());
           refresh();
         }
       } else if (e.target.id === 'sheet-review') {

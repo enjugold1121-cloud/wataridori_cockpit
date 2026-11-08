@@ -281,6 +281,21 @@ h1, h2, h3, p { margin: 0; }
   overflow: hidden;
 }
 .note-text .note-body { display: inline; font-size: inherit; padding: 4px 0; }
+.note-work.is-repeat .note-text { padding-right: 20px; }
+.repeat-mark {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .6;
+  pointer-events: none;
+}
 .note-text .note-body.is-short { display: inline-block; min-width: 4em; margin: -4px 0; }
 
 .check {

@@ -4,7 +4,7 @@ window.WB = window.WB || {};
   'use strict';
 
   const PREFIX = 'wb.v1.';
-  const COLLECTIONS = ['holds', 'work', 'lifeTemplate', 'lifeLog', 'history', 'settings', 'timer'];
+  const COLLECTIONS = ['holds', 'work', 'workRepeats', 'repeatLog', 'lifeTemplate', 'lifeLog', 'history', 'settings', 'timer'];
 
   // load(name) / save(name, value) の2つを実装すれば別の保存先になる。どちらも非同期でよい。
   const localStorageAdapter = {
@@ -28,7 +28,9 @@ window.WB = window.WB || {};
 
   const defaults = () => ({
     holds: [],            // [{id, text, pinned, reviewDate, createdAt}]
-    work: {},             // {'YYYY-MM-DD': {blockId: [{id, text, done, doneAt, createdAt}]}}
+    work: {},             // {'YYYY-MM-DD': {blockId: [{id, text, done, doneAt, createdAt, repeatId?}]}}
+    workRepeats: [],      // [{id, text, title, createdAt}] 予定の名前に紐づくくり返し付箋の雛形
+    repeatLog: {},        // {'YYYY-MM-DD': [repeatId]} その日に貼り済み（外した場合も含む）
     lifeTemplate: { am: [], pm: [], eve: [] }, // {band: [{id, text}]} 毎日くり返す雛形
     lifeLog: {},          // {'YYYY-MM-DD': {templateId: doneAtISO}} 完了記録は日付別
     history: [],          // [{refId, kind, text, day, context, doneAt}] 振り返り用
@@ -124,7 +126,7 @@ window.WB = window.WB || {};
       S.commit(COLLECTION_OF[listRef.kind]);
     },
 
-    update(ref, patch) {
+    update(ref, patch, today) {
       const item = S.find(ref);
       if (!item) return;
       Object.assign(item, patch);
@@ -133,8 +135,63 @@ window.WB = window.WB || {};
           .filter(h => h.kind === 'work' && h.refId === item.id)
           .forEach(h => { h.text = patch.text; });
         S.commit('history');
+        if (item.repeatId) syncRepeatText(item.repeatId, patch.text, today);
       }
       S.commit(COLLECTION_OF[ref.kind]);
+    },
+
+    /* ---------- くり返し付箋 ---------- */
+
+    repeatOf(id) {
+      return state.workRepeats.find(r => r.id === id) || null;
+    },
+
+    // 付箋を雛形にし、同じ名前の予定がある日に毎回出す。元の付箋はその日の1枚として扱う。
+    makeRepeat(ref, title) {
+      const task = S.find(ref);
+      if (!task || task.repeatId) return;
+      const repeat = { id: uid(), text: task.text, title, createdAt: nowISO() };
+      state.workRepeats.push(repeat);
+      task.repeatId = repeat.id;
+      markPlaced(ref.day, repeat.id);
+      S.commit('workRepeats', 'work', 'repeatLog');
+    },
+
+    // くり返しをやめる。今日以降の未完了のコピーは片付け、この付箋と完了済みは普通の付箋として残す。
+    stopRepeat(ref, today) {
+      const task = S.find(ref);
+      if (!task || !task.repeatId) return;
+      const repeatId = task.repeatId;
+      state.workRepeats = state.workRepeats.filter(r => r.id !== repeatId);
+      Object.keys(state.work).forEach(day => {
+        Object.keys(state.work[day]).forEach(blockId => {
+          const list = state.work[day][blockId].filter(t =>
+            t.repeatId !== repeatId || t.id === task.id || t.done || day < today);
+          list.forEach(t => { if (t.repeatId === repeatId) delete t.repeatId; });
+          state.work[day][blockId] = list;
+        });
+        Object.keys(state.work[day]).forEach(blockId => pruneDay({ kind: 'work', day, blockId }));
+      });
+      S.commit('workRepeats', 'work');
+    },
+
+    // その日の予定に合う雛形を、最初の同名ブロックへ1日1枚だけ貼る。外した日は貼り直さない。
+    placeRepeats(day, events) {
+      const placed = state.repeatLog[day] || [];
+      const sorted = events.slice().sort((a, b) => a.start.localeCompare(b.start));
+      let changed = false;
+      state.workRepeats.forEach(repeat => {
+        if (placed.includes(repeat.id)) return;
+        const block = sorted.find(ev => ev.title === repeat.title);
+        if (!block) return;
+        listOf({ kind: 'work', day, blockId: block.id }, true).push({ ...makeTask(repeat.text), repeatId: repeat.id });
+        placed.push(repeat.id);
+        changed = true;
+      });
+      if (changed) {
+        state.repeatLog[day] = placed;
+        S.commit('work', 'repeatLog');
+      }
     },
 
     remove(ref) {
@@ -244,6 +301,23 @@ window.WB = window.WB || {};
       delete state.work[ref.day][ref.blockId];
     }
     if (!Object.keys(state.work[ref.day]).length) delete state.work[ref.day];
+  }
+
+  function markPlaced(day, repeatId) {
+    const placed = state.repeatLog[day] || (state.repeatLog[day] = []);
+    if (!placed.includes(repeatId)) placed.push(repeatId);
+  }
+
+  // 文字の変更は雛形と、今日以降の未完了のコピーにも反映する
+  function syncRepeatText(repeatId, text, today) {
+    const repeat = S.repeatOf(repeatId);
+    if (repeat) repeat.text = text;
+    Object.keys(state.work).filter(day => day >= today).forEach(day => {
+      Object.values(state.work[day]).forEach(list => list.forEach(t => {
+        if (t.repeatId === repeatId && !t.done) t.text = text;
+      }));
+    });
+    S.commit('workRepeats', 'work');
   }
 
   function makeHold(text) {
