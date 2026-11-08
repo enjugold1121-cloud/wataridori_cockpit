@@ -265,6 +265,23 @@ h1, h2, h3, p { margin: 0; }
   overflow: hidden;
 }
 
+/* 仕事・生活の付箋：文字の上だけが編集で、余白のタップはチェックになる */
+.note-work, .note-life { cursor: pointer; }
+.note-text {
+  flex: 1;
+  min-width: 0;
+  align-self: center;
+  padding: 6px 10px 6px 0;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.note-text .note-body { display: inline; font-size: inherit; }
+
 .check {
   flex: none;
   width: 44px;
@@ -297,7 +314,7 @@ h1, h2, h3, p { margin: 0; }
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-.is-done .note-body { text-decoration: line-through; opacity: .62; }
+.is-done .note-text { text-decoration: line-through; opacity: .62; }
 .note.is-done { box-shadow: none; }
 
 .note-chosen { box-shadow: var(--shadow-lift); }
@@ -470,7 +487,6 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
   align-items: stretch;
   min-height: 48px;
 }
-.note-work .note-body, .note-life .note-body { align-self: center; padding: 6px 10px 6px 0; }
 
 /* 現在のブロック：時刻欄を塗って一目で分かるようにする */
 .strip.is-current {
@@ -583,8 +599,8 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
   align-items: stretch;
   min-height: 56px;
 }
-.note-life .note-body { font-size: 16px; padding-left: 0; }
-.note-life > .note-body:first-child { padding-left: 14px; }
+.note-life .note-text { font-size: 16px; }
+.note-life > .note-text:first-child { padding-left: 14px; }
 .life-count { margin-left: 8px; font-variant-numeric: tabular-nums; }
 #life-sub strong { color: var(--life-ink); }
 

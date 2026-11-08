@@ -79,10 +79,11 @@
     return `<li class="note note-add" data-nodrag><input class="add-input" type="text" enterkeyhint="done" maxlength="200" placeholder="${placeholder}" aria-label="${placeholder}"></li>`;
   }
 
+  // 文字の上は編集、それ以外の余白はチェック（余白のタップで編集が開かないようにする）
   function workNoteHTML(task) {
-    return `<li class="note note-work${task.done ? ' is-done' : ''}" data-id="${task.id}">
+    return `<li class="note note-work${task.done ? ' is-done' : ''}" data-id="${task.id}" data-act="toggle-work">
       <button class="check" data-act="toggle-work" data-nodrag aria-pressed="${task.done}" aria-label="完了にする"><span></span></button>
-      <div class="note-body" data-act="edit" role="button" tabindex="0">${esc(task.text)}</div>
+      <div class="note-text"><span class="note-body" data-act="edit" role="button" tabindex="0">${esc(task.text)}</span></div>
     </li>`;
   }
 
@@ -186,9 +187,9 @@
       : `<strong>${BAND_LABEL[band]}</strong> ${bandRange(band)}${items.length ? `<span class="life-count">${doneCount}/${items.length}</span>` : ''}`;
     list.innerHTML = items.map(item => {
       const done = !ui.peek && S.lifeDone(day, item.id);
-      return `<li class="note note-life${done ? ' is-done' : ''}" data-id="${item.id}">
+      return `<li class="note note-life${done ? ' is-done' : ''}" data-id="${item.id}" data-act="${ui.peek ? 'edit' : 'toggle-life'}">
         ${ui.peek ? '' : `<button class="check" data-act="toggle-life" data-nodrag aria-pressed="${done}" aria-label="完了にする"><span></span></button>`}
-        <div class="note-body" data-act="edit" role="button" tabindex="0">${esc(item.text)}</div>
+        <div class="note-text"><span class="note-body" data-act="edit" role="button" tabindex="0">${esc(item.text)}</span></div>
       </li>`;
     }).join('') + (adding ? addRowHTML('毎日くり返す付箋') : '');
     if (!items.length && !adding) list.innerHTML = '<li class="empty">この時間帯の付箋はなし</li>';
@@ -796,14 +797,14 @@
     renderSheet();
   }
 
-  // 追加入力の確定。Enter は続けて入力でき、外をタップしたら閉じる。
-  function commitAdd(input, keepOpen) {
+  // 追加入力の確定。Enter でも外をタップしても、1枚保存して閉じる。
+  function commitAdd(input, fromEnter) {
     const target = ui.adding;
     if (!target) return;
     const text = input.value.trim();
-    if (!keepOpen) ui.adding = null;
+    ui.adding = null;
     if (text) S.add(target, text);
-    if (keepOpen) {
+    if (fromEnter) {
       ui.skipBlur = true;
       refresh();
       ui.skipBlur = false;
