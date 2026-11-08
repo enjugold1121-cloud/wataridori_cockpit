@@ -775,7 +775,7 @@
     const Y = WB.sync;
     if (!Y.enabled) return '';
     if (Y.error) return `共有できませんでした（${Y.error}）。この端末には保存されていて、つながったら送ります。`;
-    return Y.lastSyncAt ? `共有中です（${T.clock(Y.lastSyncAt)} 同期）。` : '共有中です。';
+    return Y.lastSyncAt ? `共有されています（${T.clock(Y.lastSyncAt)} 同期）。` : '共有されています。';
   }
 
   async function enableSync() {
@@ -802,7 +802,7 @@
     const P = WB.calendarProvider;
     if (!P.connected) return 'いまはサンプルの予定を表示しています。';
     if (P.status === 'error') return `予定を取得できませんでした（${P.error}）。前回の予定を表示しています。`;
-    return P.updatedAt ? `接続中です（${T.clock(P.updatedAt)} 更新）。` : '接続中です。';
+    return P.updatedAt ? `接続されています（${T.clock(P.updatedAt)} 更新）。` : '接続されています。';
   }
 
   async function connectCalendar() {
