@@ -354,7 +354,7 @@
       html = '<span class="status-dot is-error"></span><span>付箋を共有できません</span><span class="status-more">（この端末には保存済み）</span>';
     } else {
       const at = P.updatedAt ? `（${T.clock(P.updatedAt)} 更新）` : '';
-      html = `<span class="status-dot is-on"></span><span><span class="status-google">Google</span>カレンダー接続中</span><span class="status-more">${at}</span>`;
+      html = `<span class="status-dot is-on"></span><span><span class="status-google">Google</span>カレンダー接続済み</span><span class="status-more">${at}</span>`;
     }
     // 表示を押すと設定（接続先の確認）を開く
     $('#cal-status').innerHTML = `<button class="status-btn" data-act="settings">${html}</button>`;
