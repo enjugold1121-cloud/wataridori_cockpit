@@ -34,7 +34,7 @@ window.WB = window.WB || {};
     lifeTemplate: { am: [], pm: [], eve: [] }, // {band: [{id, text}]} 毎日くり返す雛形
     lifeLog: {},          // {'YYYY-MM-DD': {templateId: doneAtISO}} 完了記録は日付別
     history: [],          // [{refId, kind, text, day, context, doneAt}] 振り返り用
-    settings: { amStart: '05:00', pmStart: '12:00', eveStart: '17:00', theme: 'light', chime: true },
+    settings: { amStart: '05:00', pmStart: '12:00', eveStart: '17:00', theme: 'light', chime: true, calendarUrl: '', calendarKey: '' },
     timer: { phase: 'idle', endsAt: null, pausedLeft: null },
   });
 

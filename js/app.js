@@ -4,11 +4,13 @@
 
   const T = WB.time, S = WB.store, state = S.state;
   const FREE = '__free__';
+  const ORPHAN = '__orphan__';
   const FOCUS_MS = 45 * 60000;
   const BREAK_MS = 15 * 60000;
   const BAND_LABEL = { am: '午前', pm: '午後', eve: '夕方・夜' };
   const BANDS = ['am', 'pm', 'eve'];
   const PEEK_MS = 2 * 60000;
+  const EVENTS_TTL_MS = 10 * 60000;   // Googleカレンダーの予定を取り直す間隔
   const TASK_HINT_LIMIT = 3;
 
   const $ = (q, root = document) => root.querySelector(q);
@@ -18,6 +20,9 @@
   const ui = {
     tab: 'today',           // 小さい画面で表示中のカラム
     events: {},             // 日付 → 予定の一覧
+    eventsLoadedAt: 0,      // 予定を最後に取りにいった時刻
+    loadingCount: 0,
+    pendingLoads: {},       // 取得中の範囲（同じ範囲を重ねて取りにいかない）
     expanded: new Set(),    // 手動で開いた時間ブロック
     focusBlock: null,       // 直前に開いた時間ブロック
     undo: null,             // 元に戻す用のスナップショット
@@ -44,12 +49,39 @@
   /* ---------- 時間ブロック ---------- */
 
   async function loadEvents(from, to) {
-    Object.assign(ui.events, await WB.calendarProvider.getEvents(from, to));
+    ui.loadingCount++;
+    try {
+      Object.assign(ui.events, await WB.calendarProvider.getEvents(from, to));
+    } finally {
+      ui.loadingCount--;
+      ui.eventsLoadedAt = Date.now();
+      renderStatus();
+    }
+  }
+
+  function ensureEvents(from, to) {
+    const key = `${from}_${to}`;
+    if (ui.pendingLoads[key]) return;
+    ui.pendingLoads[key] = loadEvents(from, to).finally(() => {
+      delete ui.pendingLoads[key];
+      refresh();
+    });
+  }
+
+  // 表示中の日の予定を取り直し、変わっていれば描き直す
+  async function reloadEvents() {
+    const days = onCalendar() ? WB.calendarView.days() : [today()];
+    const before = JSON.stringify(days.map(d => ui.events[d] || null));
+    await loadEvents(days[0], days[days.length - 1]);
+    const changed = JSON.stringify(days.map(d => ui.events[d] || null)) !== before;
+    if (changed && !ui.dragging && !ui.adding) refresh();
   }
 
   // 予定に付箋を重ねた一覧。「時間未定」は付箋があるか予定がない日にだけ出す。
+  // 予定が消えた・別の日へ動いた付箋は、消さずに「予定が見つからない付箋」として出す。
   function blocksFor(day, { includeFree = false } = {}) {
-    const blocks = (ui.events[day] || [])
+    const events = ui.events[day] || [];
+    const blocks = events
       .slice()
       .sort((a, b) => a.start.localeCompare(b.start))
       .map(ev => ({ ...ev, tasks: S.tasks(day, ev.id) }));
@@ -57,8 +89,23 @@
     if (includeFree || free.length || !blocks.length) {
       blocks.push({ id: FREE, title: '時間未定', start: null, end: null, kind: 'free', tasks: free });
     }
+    const orphans = orphanBlockIds(day);
+    if (orphans.length) {
+      const lists = orphans.map(blockId => ({ blockId, tasks: S.tasks(day, blockId) }));
+      const title = WB.calendarProvider.status === 'error' ? '予定を確認できない付箋' : '予定が見つからない付箋';
+      blocks.push({ id: ORPHAN, title, start: null, end: null, kind: 'orphan', lists, tasks: lists.flatMap(l => l.tasks) });
+    }
     return blocks;
   }
+
+  // 付箋はあるのに、その日の予定に見当たらないブロック（予定の取得前は判定しない）
+  function orphanBlockIds(day) {
+    if (!ui.events[day]) return [];
+    const ids = new Set(ui.events[day].map(ev => ev.id));
+    return Object.keys(state.work[day] || {}).filter(id => id !== FREE && !ids.has(id));
+  }
+
+  const isEventBlock = (day, blockId) => (ui.events[day] || []).some(ev => ev.id === blockId);
 
   function blockTitle(day, blockId) {
     const block = blocksFor(day, { includeFree: true }).find(b => b.id === blockId);
@@ -66,7 +113,7 @@
   }
 
   function phaseOf(block, day) {
-    if (block.id === FREE) return 'free';
+    if (!block.start) return 'free';
     if (day !== today()) return 'other';
     const m = T.opMinutes(new Date(), state.settings);
     if (m >= T.toMin(block.end)) return 'past';
@@ -104,7 +151,7 @@
     const canCollapse = !panel && phase !== 'current';
     return `<article class="strip is-${phase} kind-${block.kind}${panel ? ' is-panel' : ''}" data-block="${esc(block.id)}" data-default-collapsed="${!panel && phase === 'past' ? 1 : 0}">
       <div class="strip-time"${canCollapse ? ' data-act="toggle-strip"' : ''}>
-        <span class="t-start">${block.start || '未定'}</span>
+        <span class="t-start">${block.start || (block.kind === 'orphan' ? '―' : '未定')}</span>
         ${block.end ? `<span class="t-end">${block.end}</span>` : ''}
       </div>
       <div class="strip-main">
@@ -117,10 +164,16 @@
             ${total ? `<span class="strip-count">${done}/${total}</span>` : ''}
           </div>
           ${showTimer ? '<div class="timer-slot"></div>' : ''}
-          <button class="icon-btn icon-btn-small" data-act="add" data-kind="work" data-day="${day}" data-block="${esc(block.id)}" aria-label="${esc(block.title)}に付箋を追加">＋</button>
+          ${block.kind === 'orphan'
+            ? `<button class="btn btn-quiet btn-small" data-act="clear-orphans" data-day="${day}">すべて削除</button>`
+            : `<button class="icon-btn icon-btn-small" data-act="add" data-kind="work" data-day="${day}" data-block="${esc(block.id)}" aria-label="${esc(block.title)}に付箋を追加">＋</button>`}
         </header>
-        <ul class="notes notes-work" data-kind="work" data-day="${day}" data-block="${esc(block.id)}">${block.tasks.map(workNoteHTML).join('')}${adding ? addRowHTML('付箋を追加') : ''}</ul>
-        ${total > TASK_HINT_LIMIT ? '<p class="strip-hint">1ブロック3個までがおすすめ</p>' : ''}
+        ${(block.lists || [{ blockId: block.id, tasks: block.tasks }]).map(list =>
+          `<ul class="notes notes-work" data-kind="work" data-day="${day}" data-block="${esc(list.blockId)}">${list.tasks.map(workNoteHTML).join('')}${adding ? addRowHTML('付箋を追加') : ''}</ul>`).join('')}
+        ${block.kind === 'orphan' ? `<p class="strip-hint">${WB.calendarProvider.status === 'error'
+          ? '予定を取得できないため、時間割に置けない付箋です。'
+          : '予定が消えたか、別の日へ移った付箋です。別の時間へ移すか、削除してください。'}</p>` : ''}
+        ${total > TASK_HINT_LIMIT && block.kind !== 'orphan' ? '<p class="strip-hint">1ブロック3個までがおすすめ</p>' : ''}
       </div>
       ${phase === 'current' && !panel ? `<div class="strip-progress" id="strip-progress" data-start="${T.toMin(block.start)}" data-end="${T.toMin(block.end)}"></div>` : ''}
     </article>`;
@@ -160,7 +213,7 @@
     const isAfterMidnight = day !== T.dayKey(new Date());
     $('#today-sub').textContent = `${T.dayLabel(day)}${isAfterMidnight ? 'の続き' : ''}`;
     const blocks = blocksFor(day);
-    const scheduled = blocks.filter(b => b.id !== FREE);
+    const scheduled = blocks.filter(b => b.start);
     const hasCurrent = scheduled.some(b => phaseOf(b, day) === 'current');
     const next = scheduled.find(b => phaseOf(b, day) === 'future');
     const html = [];
@@ -262,11 +315,11 @@
     if (cal) {
       const days = WB.calendarView.days();
       if (days.some(d => !ui.events[d])) {
-        loadEvents(days[0], days[days.length - 1]).then(refresh);
+        ensureEvents(days[0], days[days.length - 1]);
         return;
       }
     } else if (!ui.events[today()]) {
-      loadEvents(today(), today()).then(refresh);
+      ensureEvents(today(), today());
       return;
     }
     // くり返し付箋は今日以降の表示中の日にだけ貼る（過ぎた日には後から足さない）
@@ -290,9 +343,18 @@
   }
 
   function renderStatus() {
-    $('#cal-status').innerHTML = WB.calendarProvider.connected
-      ? '<span class="status-dot is-on"></span>Googleカレンダー接続中'
-      : '<span class="status-dot"></span><span><span class="status-google">Google</span>カレンダー未接続</span><span class="status-more">（サンプル予定を表示中）</span>';
+    const P = WB.calendarProvider;
+    let html;
+    if (!P.connected) {
+      html = '<span class="status-dot"></span><span><span class="status-google">Google</span>カレンダー未接続</span><span class="status-more">（サンプル予定を表示中）</span>';
+    } else if (P.status === 'error') {
+      html = '<span class="status-dot is-error"></span><span><span class="status-google">Google</span>カレンダーを取得できません</span><span class="status-more">（前回の予定を表示中）</span>';
+    } else {
+      const at = P.updatedAt ? `（${T.clock(P.updatedAt)} 更新）` : '';
+      html = `<span class="status-dot is-on"></span><span><span class="status-google">Google</span>カレンダー接続中</span><span class="status-more">${at}</span>`;
+    }
+    // 表示を押すと設定（接続先の確認）を開く
+    $('#cal-status').innerHTML = `<button class="status-btn" data-act="settings">${html}</button>`;
   }
 
   function updateNowBits() {
@@ -405,6 +467,9 @@
     renderClock();
     tickTimer();
     if (ui.dragging || ui.adding) return;
+    if (WB.calendarProvider.connected && !ui.loadingCount && Date.now() - ui.eventsLoadedAt > EVENTS_TTL_MS) {
+      reloadEvents();
+    }
     if (ui.peek && Date.now() > ui.peekUntil) {
       ui.peek = null;
       if (!onCalendar()) renderLife();
@@ -537,6 +602,7 @@
     const isToday = day === today();
     const blocks = blocksFor(day, { includeFree: true }).filter(b => {
       if (ref.kind === 'work' && ref.day === day && ref.blockId === b.id) return false;
+      if (b.kind === 'orphan') return false;
       return !isToday || phaseOf(b, day) !== 'past';
     });
     return `<header class="sheet-head">
@@ -597,7 +663,7 @@
         <span class="field-label">時間帯（毎日くり返します）</span>
         <div class="segmented">${BANDS.map(b => `<button class="seg${b === ref.band ? ' is-on' : ''}" data-act="sheet-band" data-band="${b}">${BAND_LABEL[b]}</button>`).join('')}</div>
       </div>` : ''}
-      ${isWork && ref.blockId !== FREE ? `<div class="field">
+      ${isWork && (repeat || isEventBlock(ref.day, ref.blockId)) ? `<div class="field">
         <span class="field-label">くり返し</span>
         ${repeat
           ? `<p class="field-hint">予定「${esc(repeat.title)}」がある日に、毎回この付箋を貼ります。文字の変更は次回以降にも反映されます。</p>
@@ -659,8 +725,55 @@
         </div>
       </div>
       <label class="check-row"><input type="checkbox" id="setting-chime"${s.chime ? ' checked' : ''}> 45分と15分の区切りで小さな音を鳴らす</label>
+      <div class="field">
+        <span class="field-label">Googleカレンダー連携（読み取りのみ）</span>
+        <label class="field field-tight"><span class="field-hint">中継URL（Apps Script の Web アプリの URL）</span>
+          <input type="url" id="cal-url" value="${esc(s.calendarUrl)}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label class="field field-tight"><span class="field-hint">鍵</span>
+          <input type="text" id="cal-key" value="${esc(s.calendarKey)}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <div class="btn-group">
+          <button class="btn" data-act="cal-connect">${WB.calendarProvider.connected ? '保存し直す' : '接続する'}</button>
+          ${WB.calendarProvider.connected ? '<button class="btn btn-quiet" data-act="cal-disconnect">接続を解除</button>' : ''}
+        </div>
+        <p class="field-hint" id="cal-msg">${esc(calendarStatusText())}</p>
+      </div>
       <p class="field-hint">データはこのブラウザの中だけに保存します。PCとiPadの間では同期されません。</p>`;
     if (!dlg.open) dlg.showModal();
+  }
+
+  function calendarStatusText() {
+    const P = WB.calendarProvider;
+    if (!P.connected) return 'いまはサンプルの予定を表示しています。';
+    if (P.status === 'error') return `予定を取得できませんでした（${P.error}）。前回の予定を表示しています。`;
+    return P.updatedAt ? `接続中です（${T.clock(P.updatedAt)} 更新）。` : '接続中です。';
+  }
+
+  async function connectCalendar() {
+    const url = $('#cal-url').value.trim().split(/[?#]/)[0];
+    const key = $('#cal-key').value.trim();
+    const msg = $('#cal-msg');
+    const fail = text => {
+      msg.textContent = text;
+      msg.classList.add('is-error');
+    };
+    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url) || !key) {
+      fail('中継URL（/exec で終わるもの）と鍵を入れてください。');
+      return;
+    }
+    msg.classList.remove('is-error');
+    msg.textContent = '接続を確かめています…';
+    try {
+      const data = await WB.calendarProvider.fetchRange({ calendarUrl: url, calendarKey: key }, today(), today());
+      Object.assign(state.settings, { calendarUrl: url, calendarKey: key });
+      S.commit('settings');
+      openSettings();
+      $('#cal-msg').textContent = `接続しました。今日の予定は${(data.days[today()] || []).length}件です。`;
+      // サンプルの予定を捨てて、Googleカレンダーから取り直す
+      ui.events = {};
+      refresh();
+    } catch (e) {
+      fail(`接続できませんでした：${e.message}`);
+    }
   }
 
   function applyTheme() {
@@ -674,6 +787,24 @@
     nav() { location.hash = onCalendar() ? '#/' : '#/calendar'; },
     settings: openSettings,
     'settings-close'() { $('#settings').close(); },
+    'cal-connect': connectCalendar,
+    'clear-orphans'(el) {
+      const day = el.dataset.day;
+      const snap = S.snapshot();
+      orphanBlockIds(day).forEach(blockId => {
+        S.tasks(day, blockId).slice().forEach(t => S.remove({ kind: 'work', day, blockId, id: t.id }));
+      });
+      refresh();
+      toast('予定が見つからない付箋を削除しました', snap);
+    },
+    'cal-disconnect'() {
+      Object.assign(state.settings, { calendarUrl: '', calendarKey: '' });
+      S.commit('settings');
+      ui.events = {};
+      renderStatus();
+      openSettings();
+      refresh();
+    },
     tab(el) { ui.tab = el.dataset.tab; refresh(); },
 
     add(el) {
@@ -950,7 +1081,10 @@
     S.onSaveError = () => toast('保存できませんでした。ブラウザの設定を確認してください');
     S.onExternalChange = () => { if (!ui.dragging && !ui.adding) refresh(); };
     applyTheme();
-    await loadEvents(today(), today());
+    // 接続済みなら前回の予定で先に表示し、裏で取り直す
+    const cached = WB.calendarProvider.connected ? WB.calendarProvider.cached(today(), today()) : {};
+    if (cached[today()]) Object.assign(ui.events, cached);
+    else await loadEvents(today(), today());
     if (firstRun) {
       (ui.events[today()] || []).forEach(ev => {
         (ev.sample || []).forEach(text => S.add({ kind: 'work', day: today(), blockId: ev.id }, text));
@@ -961,6 +1095,7 @@
     renderClock();
     ui.lastSig = signature();
     refresh();
+    if (cached[today()]) reloadEvents();
     setInterval(tick, 1000);
   }
 

@@ -144,6 +144,21 @@ h1, h2, h3, p { margin: 0; }
   border: 2px solid var(--ink-3);
 }
 .status-dot.is-on { background: var(--accent); border-color: var(--accent); }
+.status-dot.is-error { background: var(--danger); border-color: var(--danger); }
+.status-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+}
 
 .topbar-actions { margin-left: auto; display: flex; gap: 8px; flex: none; }
 
@@ -538,6 +553,10 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .strip.is-future { --strip-edge: var(--work-edge); }
 .strip.is-free { --strip-edge: var(--line-strong); border-style: dashed; border-left-style: solid; }
 .strip.is-free .t-start { font-size: 14px; color: var(--ink-2); }
+.strip.kind-orphan { --strip-edge: var(--hold-strong); }
+.strip.kind-orphan .strip-title { color: var(--ink-2); }
+.strip .notes + .notes { margin-top: 6px; }
+.btn-small { min-height: 36px; padding: 0 8px; font-size: 13.5px; }
 .strip.kind-fixed { background: transparent; }
 
 .strip.is-past { background: transparent; }
@@ -663,7 +682,8 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .field-label { font-size: 13px; font-weight: 500; color: var(--ink-2); }
 .field-hint { font-size: 12.5px; color: var(--ink-2); }
 .field-hint.is-error { color: var(--danger); font-weight: 700; }
-.field textarea, .field input[type="date"], .field input[type="time"] {
+.field-tight { margin-bottom: 6px; }
+.field textarea, .field input[type="date"], .field input[type="time"], .field input[type="url"], .field input[type="text"] {
   width: 100%;
   min-height: 44px;
   padding: 8px 10px;
