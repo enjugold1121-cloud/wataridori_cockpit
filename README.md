@@ -89,7 +89,7 @@ Apps Script の Web アプリ（`gas/calendar-relay.js`）が予定を読み取�
 
 ## PCとiPadで付箋を共有
 
-同じ中継（`gas/sync-store.js`）を通して、Google ドライブのファイル `wataridori-cockpit-data.json` に保存する。中継が読み書きできるのは、自分で作ったこのファイルだけ（`drive.file` の権限）。
+同じ中継（`gas/sync-store.js`）を通して、Google ドライブのファイル `wataridori-cockpit-data.json` に保存する。中継が読み書きできるのは、自分で作ったこのファイルだけ（`drive.file` の権限）。`appsscript.json` の Drive（高度なサービス）は、Drive API を有効にするためのもの（無効だとファイルを作るときに 403 になる）。
 
 - 共有するもの：保留・仕事の付箋・くり返し付箋・生活の付箋（雛形と完了記録）・完了履歴。設定とタイマーは端末ごと
 - 変更は1.5秒待ってまとめて送り、30秒ごと・画面に戻ったときに新しい分を受け取る。つながらないときは端末に残し、30秒ごとに送り直す

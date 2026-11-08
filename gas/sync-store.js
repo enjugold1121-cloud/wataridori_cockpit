@@ -2,6 +2,7 @@
  * 渡り鳥の操縦席：PCとiPadで付箋などを共有するための保存先。
  *
  * - 保存先は Google ドライブのファイル1つ（wataridori-cockpit-data.json）。このスクリプトが作ったファイルだけを読み書きする
+ * - ドライブは REST で呼ぶ。appsscript.json の Drive（高度なサービス）は、Drive API を有効にするために入れている
  * - データは「単位」ごとに版番号を持つ。保留・雛形などは1単位、仕事の付箋と生活の完了記録は1日1単位
  * - 同じ単位を2台がほぼ同時に保存したときは、後から保存したほうが残る。そのときは呼び出し元へ conflicts で知らせる
  */
@@ -65,19 +66,19 @@ function pullUnits_(props, params) {
   return { ok: true, serverRev: doc.serverRev, units: units };
 }
 
-/** 共有の保存先が読めるかを確かめる（権限の許可にも使う）。鍵は変えない。 */
+/** 共有の保存先を読み書きできるかを確かめる（権限の許可にも使う）。保存先がなければ空で作る。鍵は変えない。 */
 function checkSync() {
   const props = PropertiesService.getScriptProperties();
   const doc = readSyncDoc_(props);
-  Logger.log('共有データ: ' + Object.keys(doc.units).length + '単位・版 ' + doc.serverRev +
-    (props.getProperty('SYNC_FILE_ID') ? '' : '（まだ保存されていません。最初の共有で作られます）'));
+  if (!props.getProperty('SYNC_FILE_ID')) writeSyncDoc_(props, doc);
+  Logger.log('共有データ: ' + Object.keys(doc.units).length + '単位・版 ' + doc.serverRev + '（保存先: ' + SYNC_FILE_NAME + '）');
 }
 
 function readSyncDoc_(props) {
   const id = props.getProperty('SYNC_FILE_ID');
   if (!id) return { serverRev: 0, units: {} };
   const res = driveFetch_('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media', { method: 'get' });
-  if (res.getResponseCode() !== 200) throw new Error('共有データを読めませんでした（' + res.getResponseCode() + '）');
+  if (res.getResponseCode() !== 200) throw driveError_('共有データを読めませんでした', res);
   const doc = JSON.parse(res.getContentText() || '{}');
   return { serverRev: Number(doc.serverRev) || 0, units: doc.units || {} };
 }
@@ -90,7 +91,7 @@ function writeSyncDoc_(props, doc) {
       contentType: 'application/json',
       payload: JSON.stringify({ name: SYNC_FILE_NAME, mimeType: 'application/json' }),
     });
-    if (created.getResponseCode() !== 200) throw new Error('共有データを作れませんでした（' + created.getResponseCode() + '）');
+    if (created.getResponseCode() !== 200) throw driveError_('共有データを作れませんでした', created);
     id = JSON.parse(created.getContentText()).id;
     props.setProperty('SYNC_FILE_ID', id);
   }
@@ -99,7 +100,16 @@ function writeSyncDoc_(props, doc) {
     contentType: 'application/json',
     payload: Utilities.newBlob(JSON.stringify({ serverRev: doc.serverRev, units: doc.units }), 'application/json').getBytes(),
   });
-  if (res.getResponseCode() !== 200) throw new Error('共有データを保存できませんでした（' + res.getResponseCode() + '）');
+  if (res.getResponseCode() !== 200) throw driveError_('共有データを保存できませんでした', res);
+}
+
+// ドライブが返した理由も添える（API が無効・権限不足などを見分けるため）
+function driveError_(label, res) {
+  let detail = '';
+  try {
+    detail = JSON.parse(res.getContentText()).error.message || '';
+  } catch (err) {}
+  return new Error(label + '（' + res.getResponseCode() + (detail ? ': ' + detail : '') + '）');
 }
 
 function driveFetch_(url, options) {

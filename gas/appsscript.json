@@ -13,6 +13,11 @@
         "userSymbol": "Calendar",
         "serviceId": "calendar",
         "version": "v3"
+      },
+      {
+        "userSymbol": "Drive",
+        "serviceId": "drive",
+        "version": "v3"
       }
     ]
   },
