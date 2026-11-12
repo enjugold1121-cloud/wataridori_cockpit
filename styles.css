@@ -249,6 +249,9 @@ h1, h2, h3, p { margin: 0; }
 .col-sub { font-size: 13px; color: var(--ink-2); }
 .count { font-size: 13px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
 .col-today .col-head { padding-left: 4px; padding-right: 0; }
+.today-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.day-switch { flex: none; }
+.col-today.is-ahead .col-head h2 { color: var(--accent); }
 
 /* ---------- 付箋 ---------- */
 

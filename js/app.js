@@ -10,6 +10,7 @@
   const BAND_LABEL = { am: '午前', pm: '午後', eve: '夕方・夜' };
   const BANDS = ['am', 'pm', 'eve'];
   const PEEK_MS = 2 * 60000;
+  const AHEAD_MS = 5 * 60000;           // 明日の時間割を見たまま触らなければ今日へ戻す
   const EVENTS_TTL_MS = 10 * 60000;   // Googleカレンダーの予定を取り直す間隔
   const TASK_HINT_LIMIT = 3;
 
@@ -31,6 +32,8 @@
     skipBlur: false,
     peek: null,             // 他の時間帯の雛形を編集中なら band
     peekUntil: 0,
+    ahead: false,           // 真ん中のカラムで明日の時間割を表示中
+    aheadUntil: 0,
     sheet: null,
     dragging: false,
     justDragged: false,
@@ -38,6 +41,9 @@
   };
 
   const today = () => T.operatingDay(new Date(), state.settings);
+  // 真ん中のカラムに出している日（今日か明日）
+  const timelineDay = () => (ui.ahead ? T.addDays(today(), 1) : today());
+  const mainDays = () => [...new Set([today(), timelineDay()])];
   const onCalendar = () => location.hash === '#/calendar';
 
   function bandRange(band) {
@@ -73,7 +79,7 @@
 
   // 表示中の日の予定を取り直し、変わっていれば描き直す
   async function reloadEvents() {
-    const days = onCalendar() ? WB.calendarView.days() : [today()];
+    const days = onCalendar() ? WB.calendarView.days() : mainDays();
     const before = JSON.stringify(days.map(d => ui.events[d] || null));
     await loadEvents(days[0], days[days.length - 1]);
     const changed = JSON.stringify(days.map(d => ui.events[d] || null)) !== before;
@@ -212,24 +218,32 @@
   }
 
   function renderToday() {
-    const day = today();
-    const isAfterMidnight = day !== T.dayKey(new Date());
+    const ahead = ui.ahead;
+    const day = timelineDay();
+    const isAfterMidnight = !ahead && day !== T.dayKey(new Date());
+    $('.col-today').classList.toggle('is-ahead', ahead);
+    $('#today-title').textContent = ahead ? '明日の時間割' : '今日の時間割';
     $('#today-sub').textContent = `${T.dayLabel(day)}${isAfterMidnight ? 'の続き' : ''}`;
+    $('#today-switch').innerHTML = ahead
+      ? '<button class="btn btn-small day-switch" data-act="view-today" aria-label="今日の時間割へ戻る">‹ 今日</button>'
+      : '<button class="btn btn-small day-switch" data-act="view-ahead" aria-label="明日の時間割を見る">明日 ›</button>';
     const blocks = blocksFor(day);
     const scheduled = blocks.filter(b => b.start);
     const hasCurrent = scheduled.some(b => phaseOf(b, day) === 'current');
     const next = scheduled.find(b => phaseOf(b, day) === 'future');
+    // 「いま」の目印は今日だけに出す
+    const marks = !ahead && !hasCurrent && scheduled.length;
     const html = [];
     blocks.forEach(b => {
-      if (!hasCurrent && next && b.id === next.id) {
+      if (marks && next && b.id === next.id) {
         html.push(nowMarkerHTML(`いまは予定なし。次は ${b.start} ${b.title}`, T.toMin(b.start)));
       }
-      if (!hasCurrent && !next && scheduled.length && b.id === FREE) {
+      if (marks && !next && b.id === FREE) {
         html.push(nowMarkerHTML('今日の予定はここまで'));
       }
       html.push(stripHTML(day, b));
     });
-    if (!hasCurrent && !next && scheduled.length && !blocks.some(b => b.id === FREE)) {
+    if (marks && !next && !blocks.some(b => b.id === FREE)) {
       html.push(nowMarkerHTML('今日の予定はここまで'));
     }
     $('#timeline').innerHTML = html.join('');
@@ -321,12 +335,12 @@
         ensureEvents(days[0], days[days.length - 1]);
         return;
       }
-    } else if (!ui.events[today()]) {
-      ensureEvents(today(), today());
+    } else if (mainDays().some(d => !ui.events[d])) {
+      ensureEvents(today(), timelineDay());
       return;
     }
     // くり返し付箋は今日以降の表示中の日にだけ貼る（過ぎた日には後から足さない）
-    const visibleDays = cal ? WB.calendarView.days() : [today()];
+    const visibleDays = cal ? WB.calendarView.days() : mainDays();
     visibleDays.filter(d => d >= today()).forEach(d => S.placeRepeats(d, ui.events[d] || []));
     $('#page-main').hidden = cal;
     $('#page-calendar').hidden = !cal;
@@ -483,6 +497,11 @@
       ui.peek = null;
       if (!onCalendar()) renderLife();
     }
+    // 明日の時間割を見たまましばらく触らなければ、今日へ戻す
+    if (ui.ahead && Date.now() > ui.aheadUntil && !$('#sheet').open) {
+      ui.ahead = false;
+      if (!onCalendar()) refresh();
+    }
     const sig = signature();
     if (sig !== ui.lastSig) {
       const dayChanged = sig.split('|')[0] !== ui.lastSig.split('|')[0];
@@ -490,6 +509,7 @@
       if (dayChanged) {
         ui.expanded.clear();
         ui.focusBlock = null;
+        ui.ahead = false;
       }
       refresh();
     } else if (!onCalendar()) {
@@ -931,6 +951,19 @@
       refresh();
     },
     'hold-to-today'(el) { openSheet(refFrom(el), 'pick', today()); },
+    'view-ahead'() {
+      ui.ahead = true;
+      ui.aheadUntil = Date.now() + AHEAD_MS;
+      ui.expanded.clear();
+      ui.focusBlock = null;
+      refresh();
+    },
+    'view-today'() {
+      ui.ahead = false;
+      ui.expanded.clear();
+      ui.focusBlock = null;
+      refresh();
+    },
     'toggle-strip'(el) {
       const strip = el.closest('.strip');
       const id = strip.dataset.block;
@@ -1106,6 +1139,7 @@
     document.addEventListener('pointerdown', e => {
       unlockAudio();
       if (ui.peek) ui.peekUntil = Date.now() + PEEK_MS;
+      if (ui.ahead) ui.aheadUntil = Date.now() + AHEAD_MS;
       // iOS は余白のタップでは入力を閉じないので明示的に閉じる
       if (ui.adding && !e.target.closest('.add-input') && document.activeElement && document.activeElement.matches('.add-input')) {
         document.activeElement.blur();
