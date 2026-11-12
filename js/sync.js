@@ -1,6 +1,8 @@
 // PCとiPadで付箋などを共有する。保存先は中継（gas/sync-store.js）経由の Google ドライブ。
 // 変更は少し待ってまとめて送り、30秒ごと・画面に戻ったときに新しい分を受け取る。
-// 同じ単位をほぼ同時に2台で変えたときは、後から保存したほうが残る（そのとき onConflict で知らせる）。
+// 送る前には必ず新しい分を受け取り、両方の端末の変更を1つにまとめてから送る（片方の変更で上書きしない）。
+// まとめるときは前回そろえた内容（base）と比べ、それぞれが足した・消した・変えたところを取り込む。
+// 同じところを両方で変えたときだけ、この端末の内容を残す。
 // 設定とタイマーは端末ごとのままにする。
 window.WB = window.WB || {};
 (function (WB) {
@@ -19,11 +21,115 @@ window.WB = window.WB || {};
   let meta = loadMeta();
   let pushTimer = null;
   let pushing = false;
-  let pulling = false;
+  let pullPromise = null;
 
+  // base は単位ごとの「前回そろえた内容」。2台の変更をまとめるときの基準にする。
   function loadMeta() {
-    const base = { enabled: false, lastServerRev: 0, revs: {}, hashes: {}, lastSyncAt: null, error: '' };
-    try { return { ...base, ...JSON.parse(localStorage.getItem(META_KEY)) }; } catch (e) { return base; }
+    const empty = { enabled: false, lastServerRev: 0, revs: {}, hashes: {}, base: {}, lastSyncAt: null, error: '' };
+    try {
+      const loaded = { ...empty, ...JSON.parse(localStorage.getItem(META_KEY)) };
+      loaded.base = loaded.base || {};
+      return loaded;
+    } catch (e) { return empty; }
+  }
+
+  const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+
+  /* ---------- 2台の変更をまとめる ---------- */
+
+  const isMap = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+  // キーの順番に左右されない比較用の文字列
+  function stable(v) {
+    if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`;
+    if (isMap(v)) return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`;
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  const same = (a, b) => stable(a) === stable(b);
+
+  // 一覧の要素を見分ける目印。付箋などは id、完了履歴は「種類・付箋・日付」、文字列はその値。
+  function itemKey(item) {
+    if (item === null || typeof item !== 'object') return `v:${JSON.stringify(item)}`;
+    if (item.id) return `id:${item.id}`;
+    if (item.refId) return `h:${item.kind}|${item.refId}|${item.day}`;
+    return null;
+  }
+
+  // 一覧を「目印 → 要素」に直す。目印のない要素があればまとめられないので null。
+  function listEntries(list) {
+    const entries = new Map();
+    for (const item of list) {
+      const key = itemKey(item);
+      if (key === null) return null;
+      let unique = key;
+      for (let n = 2; entries.has(unique); n++) unique = `${key}#${n}`;
+      entries.set(unique, item);
+    }
+    return entries;
+  }
+
+  // 目印ごとにまとめる。並びはこの端末の順を基本に、共有先にだけあるものは共有先で直前にあったものの後ろへ入れる。
+  function mergeEntries(base, local, remote) {
+    const order = [...local.keys()];
+    let prev = null;
+    remote.forEach((_, key) => {
+      if (!local.has(key)) order.splice(prev === null ? 0 : order.indexOf(prev) + 1, 0, key);
+      prev = key;
+    });
+    const out = new Map();
+    order.forEach(key => {
+      const inBase = base.has(key);
+      if (local.has(key) && remote.has(key)) {
+        out.set(key, merge3(inBase ? base.get(key) : undefined, local.get(key), remote.get(key)));
+      } else if (local.has(key)) {
+        // 共有先で消したもの（この端末で変えていなければ消す）
+        if (!(inBase && same(local.get(key), base.get(key)))) out.set(key, local.get(key));
+      } else if (!(inBase && same(remote.get(key), base.get(key)))) {
+        // この端末で消したもの（共有先で変えていなければ消す）
+        out.set(key, remote.get(key));
+      }
+    });
+    return out;
+  }
+
+  // base から local・remote それぞれへの変更を両方取り込む。base が undefined なら、足し合わせる。
+  function merge3(base, local, remote) {
+    if (same(local, remote)) return local;
+    if (base !== undefined && same(local, base)) return remote;
+    if (base !== undefined && same(remote, base)) return local;
+    if (Array.isArray(local) && Array.isArray(remote)) {
+      const b = listEntries(Array.isArray(base) ? base : []);
+      const l = listEntries(local);
+      const r = listEntries(remote);
+      if (b && l && r) return [...mergeEntries(b, l, r).values()];
+      return local;
+    }
+    if (isMap(local) && isMap(remote)) {
+      const toEntries = obj => new Map(Object.entries(isMap(obj) ? obj : {}));
+      return Object.fromEntries(mergeEntries(toEntries(base), toEntries(local), toEntries(remote)));
+    }
+    return local;
+  }
+
+  // 2台がそれぞれ同じくり返し付箋を貼っていたら、1日1枚に戻す（完了したほうを残す）
+  function dedupeRepeats(day) {
+    const chosen = new Map();
+    Object.values(day).forEach(list => list.forEach(task => {
+      if (!task.repeatId) return;
+      const kept = chosen.get(task.repeatId);
+      if (!kept || (!kept.done && task.done)) chosen.set(task.repeatId, task);
+    }));
+    const out = {};
+    Object.entries(day).forEach(([blockId, list]) => {
+      const kept = list.filter(task => !task.repeatId || chosen.get(task.repeatId) === task);
+      if (kept.length) out[blockId] = kept;
+    });
+    return out;
+  }
+
+  function mergeUnit(key, base, local, remote) {
+    const merged = merge3(base, local, remote);
+    return key.startsWith('work/') && isMap(merged) ? dedupeRepeats(merged) : merged;
   }
 
   function saveMeta() {
@@ -111,21 +217,30 @@ window.WB = window.WB || {};
     Y.onStatus();
   }
 
-  async function pull() {
-    if (!meta.enabled || pulling || !S.state.settings.calendarUrl) return;
-    pulling = true;
+  // 新しい分を受け取る。同時に呼ばれたら、取得中の分の結果を待つ。
+  function pull() {
+    if (!meta.enabled || !S.state.settings.calendarUrl) return Promise.resolve();
+    if (!pullPromise) pullPromise = pullOnce().finally(() => { pullPromise = null; });
+    return pullPromise;
+  }
+
+  async function pullOnce() {
     try {
       const data = await call('GET', { action: 'pull', since: meta.lastServerRev });
-      const dirty = new Set(dirtyUnits().map(u => u.key));
       const units = currentUnits();
       const changed = new Set();
       Object.entries(data.units).forEach(([key, unit]) => {
-        if (dirty.has(key)) return; // この端末の未送信の変更を優先し、次の送信で上書きする
+        // すでに知っている版（自分が送った分など）より古い・同じなら使わない。
+        // 取得が送信の完了より後に届いたとき、古い内容で戻さないため。
+        if (unit.rev <= (meta.revs[key] || 0)) return;
+        const local = key in units ? units[key] : (key.includes('/') ? {} : undefined);
+        const dirty = hash(local) !== meta.hashes[key];
+        // この端末に未送信の変更があれば、上書きせずに両方の変更をまとめる（まとめた分は次の送信で送る）
+        const next = dirty ? mergeUnit(key, meta.base[key], local, unit.value) : unit.value;
         meta.revs[key] = unit.rev;
         meta.hashes[key] = hash(unit.value);
-        const local = key in units ? units[key] : (key.includes('/') ? {} : undefined);
-        if (hash(local) === meta.hashes[key]) return;
-        changed.add(applyUnit(key, unit.value));
+        meta.base[key] = clone(unit.value);
+        if (hash(next) !== hash(local)) changed.add(applyUnit(key, clone(next)));
       });
       meta.lastServerRev = data.serverRev;
       if (changed.size) {
@@ -135,8 +250,6 @@ window.WB = window.WB || {};
       succeeded();
     } catch (e) {
       failed(e);
-    } finally {
-      pulling = false;
     }
   }
 
@@ -146,10 +259,14 @@ window.WB = window.WB || {};
       schedulePush();
       return;
     }
-    const dirty = dirtyUnits();
-    if (!dirty.length) return;
+    if (!dirtyUnits().length) return;
     pushing = true;
     try {
+      // 送る前に、もう一方の端末の変更を受け取ってまとめておく
+      await pull();
+      // 送る内容はこの時点の写しにする。送信中に変えた分を「送った」と数えないため（変えた分は次の送信で送る）。
+      const dirty = dirtyUnits().map(u => ({ key: u.key, value: clone(u.value) }));
+      if (!dirty.length) return;
       const data = await call('POST', null, {
         action: 'push',
         units: dirty.map(u => ({ key: u.key, value: u.value, baseRev: meta.revs[u.key] || 0 })),
@@ -157,7 +274,10 @@ window.WB = window.WB || {};
       dirty.forEach(u => {
         meta.hashes[u.key] = hash(u.value);
         meta.revs[u.key] = data.revs[u.key];
+        meta.base[u.key] = u.value;
       });
+      // 送信中に変わった分があれば続けて送る
+      if (dirtyUnits().length) schedulePush();
       succeeded();
       if (data.conflicts && data.conflicts.length) Y.onConflict();
     } catch (e) {
@@ -186,13 +306,14 @@ window.WB = window.WB || {};
 
     pull,
     push,
+    _merge: mergeUnit, // テスト用
 
     // 共有を始める。共有データがまだなければこの端末の内容を基準にし、あれば確認のうえ共有データに置き換える。
     async enable(confirmReplace) {
       const data = await call('GET', { action: 'pull', since: 0 });
       const serverKeys = Object.keys(data.units);
       if (!serverKeys.length) {
-        meta = { ...meta, enabled: true, lastServerRev: data.serverRev, revs: {}, hashes: {}, error: '' };
+        meta = { ...meta, enabled: true, lastServerRev: data.serverRev, revs: {}, hashes: {}, base: {}, error: '' };
         saveMeta();
         await push();
         if (meta.error) {
@@ -207,11 +328,12 @@ window.WB = window.WB || {};
       try { localStorage.setItem(`wb.v1.backup.${Date.now()}`, S.snapshot()); } catch (e) {}
       WHOLE.forEach(name => { state[name] = JSON.parse(JSON.stringify(EMPTY[name])); });
       BY_DAY.forEach(name => { state[name] = {}; });
-      meta = { ...meta, enabled: true, lastServerRev: data.serverRev, revs: {}, hashes: {}, error: '' };
+      meta = { ...meta, enabled: true, lastServerRev: data.serverRev, revs: {}, hashes: {}, base: {}, error: '' };
       serverKeys.forEach(key => {
-        applyUnit(key, data.units[key].value);
+        applyUnit(key, clone(data.units[key].value));
         meta.revs[key] = data.units[key].rev;
         meta.hashes[key] = hash(data.units[key].value);
+        meta.base[key] = clone(data.units[key].value);
       });
       saveMeta();
       S.commit(...WHOLE, ...BY_DAY);
@@ -227,6 +349,14 @@ window.WB = window.WB || {};
     },
 
     start() {
+      // 以前の版から引き継いだ端末は base を持っていないので、送信済みの単位は今の内容を base にする
+      const units = currentUnits();
+      Object.keys(meta.hashes).forEach(key => {
+        if (key in meta.base) return;
+        const local = key in units ? units[key] : (key.includes('/') ? {} : undefined);
+        if (hash(local) === meta.hashes[key]) meta.base[key] = clone(local);
+      });
+      saveMeta();
       S.onCommit = names => {
         if (names.some(n => WHOLE.includes(n) || BY_DAY.includes(n))) schedulePush();
       };
